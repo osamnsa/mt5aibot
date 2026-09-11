@@ -38,30 +38,36 @@ which dashboard you click through. Use **Render** below (open for
 signups as of this writing); if Koyeb reopens later, its steps are the
 same as Render's, just on koyeb.com instead.
 
-### 1. Train the model locally first
+### 1. Train one model per symbol
 
-The trained model file (`model.pkl`) needs to already exist and be
-committed to the repo before the platform builds it — it doesn't train
-anything, it just runs what you give it.
+Models are per-symbol, in `ai_service/models/<SYMBOL>.pkl` — **the filename
+must exactly match the symbol's name in MT5's Market Watch** (case-sensitive:
+e.g. `models/BTC.pkl`, `models/XAUUSD.pkl`, `models/EURUSD.pkl`). A gold
+model has no business predicting a forex pair's direction, so the service
+never falls back to a mismatched one - a symbol with no matching file just
+gets skipped (no trade proposed) until you train one for it.
 
-1. In MT5: **Tools → History Center** (or a chart's right-click menu),
-   pick the symbol/timeframe you'll trade (match `InpTimeframe` in the
-   EA), and **Export** to CSV. Get as much history as your broker offers —
-   months at minimum, a year+ is better.
-2. On your computer:
+1. In MT5: press **F2** (or Market Watch → right-click **Symbols**), pick
+   the symbol/timeframe you'll trade (match `InpTimeframe` in the EA), and
+   **Export** to CSV. Get as much history as your broker offers — months
+   at minimum, a year+ is better. Repeat per symbol you want the bot
+   trading (e.g. once for BTC, once for each metal, once for each forex
+   pair).
+2. On your computer, once per symbol:
    ```
    cd ai_service
    pip install -r requirements.txt
-   python train_model.py path/to/your_export.csv --out model.pkl
+   python train_model.py path/to/XAUUSD_export.csv --out models/XAUUSD.pkl
    ```
-3. **Read the printed validation report before going further.** If the
-   confident-signal up/down rates on held-out data aren't clearly above
-   50%, the model found no real edge in this data — don't ship it. Try
-   more history or a different symbol first.
-4. Commit the model into the repo so the deploy picks it up:
+3. **Read the printed validation report before going further, every time.**
+   If the confident-signal up/down rates on held-out data aren't clearly
+   above 50%, that particular symbol's model found no real edge — don't
+   ship it for that instrument. Each symbol is a separate judgment call;
+   a good result on one doesn't mean the others will be.
+4. Commit the models into the repo so the deploy picks them up:
    ```
-   git add ai_service/model.pkl
-   git commit -m "Add trained model"
+   git add ai_service/models/
+   git commit -m "Add trained models"
    git push
    ```
 
@@ -79,9 +85,10 @@ anything, it just runs what you give it.
    is up correctly).
 7. Deploy. Render gives you a URL like `https://your-app-name.onrender.com`.
 8. Confirm it's alive: open `https://your-app-name.onrender.com/health` in
-   a browser — should show `{"status": "ok", "model_loaded": true}`. If
-   `model_loaded` is `false`, the model.pkl commit didn't make it into the
-   build — check step 4.
+   a browser — should show `{"status": "ok", "models_loaded": ["BTC", ...]}`
+   listing every symbol you trained. If a symbol you expect is missing,
+   its `models/<SYMBOL>.pkl` commit didn't make it into the build — check
+   step 4.
 
 **Free-tier note:** Render's free web services spin down after ~15 minutes
 of no traffic and take 30-60 seconds to wake up on the next request. If the
@@ -110,8 +117,8 @@ Windows VPS as MT5.
 
 1. Copy the `ai_service/` folder onto the VPS (e.g. `C:\ai_service\`).
 2. `cd C:\ai_service` then `pip install -r requirements.txt`.
-3. Train the model the same way as Option A step 1 (steps 1-3), saving
-   `model.pkl` directly into `C:\ai_service\`.
+3. Train each symbol's model the same way as Option A step 1, saving into
+   `C:\ai_service\models\<SYMBOL>.pkl`.
 4. Run it: `python app.py` (leave the window open, or use `pythonw app.py`
    to run it without a visible console, or set it up as a scheduled task
    that starts at login).
@@ -136,6 +143,14 @@ wired up. If the Journal/Experts log shows repeated "WebRequest blocked" or
 "WebRequest ... failed" messages, re-check the whitelist step for whichever
 option you chose, and double check `InpAiApiKey` matches exactly if you're
 on Render (or whichever platform you used).
+
+## Which symbols the EA actually scans
+
+Set the EA's `InpSymbols` input to a comma-separated list matching exactly
+the symbols you've trained models for (e.g. `BTC,XAUUSD,EURUSD`). A symbol
+in that list with no trained model just gets skipped silently (checkable
+via `/health`'s `models_loaded` list) — it won't crash anything, but it
+also won't ever propose a trade until you train and deploy one for it.
 
 ## Everything else is unchanged
 

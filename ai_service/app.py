@@ -1,15 +1,22 @@
 """
 AI signal service - can run on your VPS alongside MT5, or be deployed
-standalone on a platform like Koyeb (recommended: it stays up without you
+standalone on a platform like Render (recommended: it stays up without you
 managing a Python process, and your VPS only needs to run MT5 itself).
 
 The AiSignalBot.mq5 Expert Advisor calls this over HTTP with recent price
 bars and gets back a direction + confidence, computed by a real trained
 model (see train_model.py) - not hardcoded rules.
 
+Models are per-symbol: put a trained file at models/<SYMBOL>.pkl, named
+exactly like the symbol appears in MT5 (e.g. models/XAUUSD.pkl,
+models/EURUSD.pkl, models/BTC.pkl). A request for a symbol with no
+matching file gets direction=none rather than a wrong-instrument guess -
+a gold-trained model has no business predicting a forex pair, and vice
+versa, so this never silently falls back to a mismatched model.
+
 Run locally with:
   python app.py
-In production (Koyeb, or anywhere else) it's served via gunicorn - see
+In production (Render, or anywhere else) it's served via gunicorn - see
 the Dockerfile.
 
 If the API_KEY environment variable is set, every request except /health
@@ -17,6 +24,7 @@ must include a matching "X-API-Key" header - required once this service
 is reachable from the public internet, not just localhost.
 """
 import os
+import glob
 
 import pandas as pd
 from flask import Flask, request, jsonify
@@ -24,18 +32,47 @@ import joblib
 
 from features import compute_indicator_frame, FEATURE_COLUMNS
 
-MODEL_PATH = "model.pkl"
+MODELS_DIR = "models"
+LEGACY_MODEL_PATH = "model.pkl"  # older single-model deployments
 CONFIDENCE_THRESHOLD = 0.60  # below this on both sides, respond "none"
 API_KEY = os.environ.get("API_KEY", "")
 
 app = Flask(__name__)
 
-try:
-    model = joblib.load(MODEL_PATH)
-except FileNotFoundError:
-    model = None
-    print(f"WARNING: {MODEL_PATH} not found. Run train_model.py first. "
-          f"/predict will return direction=none until a model exists.")
+
+def load_models():
+    models = {}
+    for path in glob.glob(os.path.join(MODELS_DIR, "*.pkl")):
+        symbol = os.path.splitext(os.path.basename(path))[0]
+        try:
+            models[symbol] = joblib.load(path)
+            print(f"Loaded model for symbol '{symbol}' from {path}")
+        except Exception as e:
+            print(f"WARNING: failed to load {path}: {e}")
+
+    if os.path.exists(LEGACY_MODEL_PATH):
+        try:
+            models["__default__"] = joblib.load(LEGACY_MODEL_PATH)
+            print(f"Loaded legacy default model from {LEGACY_MODEL_PATH} "
+                  f"(used only for symbols with no models/<SYMBOL>.pkl match)")
+        except Exception as e:
+            print(f"WARNING: failed to load {LEGACY_MODEL_PATH}: {e}")
+
+    if not models:
+        print(f"WARNING: no models found in {MODELS_DIR}/ or {LEGACY_MODEL_PATH}. "
+              f"Run train_model.py first. /predict will return direction=none until one exists.")
+    return models
+
+
+MODELS = load_models()
+
+
+def model_for_symbol(symbol: str):
+    if symbol in MODELS:
+        return MODELS[symbol], symbol
+    if "__default__" in MODELS:
+        return MODELS["__default__"], "__default__ (legacy model.pkl)"
+    return None, None
 
 
 @app.before_request
@@ -49,11 +86,8 @@ def check_api_key():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    if model is None:
-        return jsonify({"direction": "none", "confidence": 0.0,
-                         "reason": "no model loaded - run train_model.py"}), 200
-
     payload = request.get_json(force=True, silent=True) or {}
+    symbol = payload.get("symbol", "")
     closes = payload.get("closes")
     highs = payload.get("highs")
     lows = payload.get("lows")
@@ -61,6 +95,12 @@ def predict():
 
     if not closes or not highs or not lows:
         return jsonify({"error": "missing closes/highs/lows"}), 400
+
+    model, used_key = model_for_symbol(symbol)
+    if model is None:
+        return jsonify({"direction": "none", "confidence": 0.0,
+                         "reason": f"no trained model for symbol '{symbol}' - "
+                                   f"add models/{symbol}.pkl"}), 200
 
     n = len(closes)
     if n < 40:
@@ -90,12 +130,13 @@ def predict():
     else:
         direction, confidence = "none", max(proba_up, 1 - proba_up)
 
-    return jsonify({"direction": direction, "confidence": round(confidence, 4)})
+    return jsonify({"direction": direction, "confidence": round(confidence, 4),
+                     "model_used": used_key})
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "model_loaded": model is not None})
+    return jsonify({"status": "ok", "models_loaded": sorted(MODELS.keys())})
 
 
 if __name__ == "__main__":

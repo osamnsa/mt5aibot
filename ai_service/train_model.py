@@ -5,8 +5,11 @@ How to export the CSV from MT5:
   Tools -> History Center (or the "..." menu on a chart) -> pick your
   symbol and timeframe -> Export -> save as CSV.
 
-Usage:
-  python train_model.py XAUUSD_M15.csv --out model.pkl
+Usage - name the output to match the exact symbol name shown in MT5's
+Market Watch (case-sensitive - this is how app.py picks the right model
+per symbol, so a mismatch here means it silently won't be used):
+  python train_model.py XAUUSD_M15.csv --out models/XAUUSD.pkl
+  python train_model.py EURUSD_M15.csv --out models/EURUSD.pkl
 
 Read the printed validation report before trusting this model with real
 money: if the "actual up-rate" / "actual down-rate" among confident
