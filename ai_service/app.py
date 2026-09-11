@@ -14,6 +14,14 @@ matching file gets direction=none rather than a wrong-instrument guess -
 a gold-trained model has no business predicting a forex pair, and vice
 versa, so this never silently falls back to a mismatched model.
 
+Some instruments validate well on one side (buy or sell) and poorly on
+the other - that's a real, observed pattern for some symbols, not a
+bug. To ship only the trustworthy side, add an optional sidecar
+models/<SYMBOL>.json next to the model, e.g.:
+  {"disabled_directions": ["sell"]}
+Any direction listed there is suppressed (mapped to "none") even if the
+model itself would have called it.
+
 Run locally with:
   python app.py
 In production (Render, or anywhere else) it's served via gunicorn - see
@@ -25,6 +33,7 @@ is reachable from the public internet, not just localhost.
 """
 import os
 import glob
+import json
 
 import pandas as pd
 from flask import Flask, request, jsonify
@@ -64,7 +73,24 @@ def load_models():
     return models
 
 
+def load_direction_configs():
+    configs = {}
+    for path in glob.glob(os.path.join(MODELS_DIR, "*.json")):
+        symbol = os.path.splitext(os.path.basename(path))[0]
+        try:
+            with open(path) as f:
+                cfg = json.load(f)
+            disabled = set(cfg.get("disabled_directions", []))
+            if disabled:
+                configs[symbol] = disabled
+                print(f"'{symbol}': disabled directions {sorted(disabled)} per {path}")
+        except Exception as e:
+            print(f"WARNING: failed to load {path}: {e}")
+    return configs
+
+
 MODELS = load_models()
+DIRECTION_CONFIGS = load_direction_configs()
 
 
 def model_for_symbol(symbol: str):
@@ -130,13 +156,23 @@ def predict():
     else:
         direction, confidence = "none", max(proba_up, 1 - proba_up)
 
+    disabled = DIRECTION_CONFIGS.get(symbol, set())
+    if direction in disabled:
+        return jsonify({"direction": "none", "confidence": 0.0,
+                         "reason": f"{direction} suppressed for {symbol} "
+                                   f"(validated unreliable for this side)"}), 200
+
     return jsonify({"direction": direction, "confidence": round(confidence, 4),
                      "model_used": used_key})
 
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "models_loaded": sorted(MODELS.keys())})
+    return jsonify({
+        "status": "ok",
+        "models_loaded": sorted(MODELS.keys()),
+        "direction_restrictions": {k: sorted(v) for k, v in DIRECTION_CONFIGS.items()},
+    })
 
 
 if __name__ == "__main__":
