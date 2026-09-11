@@ -22,19 +22,26 @@ that report, don't skip it.
    same platform limit as before.
 2. **The AI service** (`ai_service/`) — this is just an HTTP API. It does
    **not** need to be on the same machine as MT5. Two ways to run it:
-   - **Koyeb (recommended)** — deployed from GitHub, stays running for you,
-     nothing to babysit on your VPS.
+   - **Render (or a similar container platform)** — deployed from GitHub,
+     stays running for you, nothing to babysit on your VPS.
    - **Directly on the VPS** — simpler to reason about, but you're
      responsible for keeping the Python process alive.
 
 ---
 
-## Option A — Host the AI service on Koyeb (recommended)
+## Option A — Host the AI service on a free container platform (recommended)
+
+Koyeb was the first choice here, but it's currently **not accepting new
+signups**. The good news: this Dockerfile-based setup works identically on
+several platforms, so nothing about the bot or the code changes — just
+which dashboard you click through. Use **Render** below (open for
+signups as of this writing); if Koyeb reopens later, its steps are the
+same as Render's, just on koyeb.com instead.
 
 ### 1. Train the model locally first
 
 The trained model file (`model.pkl`) needs to already exist and be
-committed to the repo before Koyeb builds it — Koyeb doesn't train
+committed to the repo before the platform builds it — it doesn't train
 anything, it just runs what you give it.
 
 1. In MT5: **Tools → History Center** (or a chart's right-click menu),
@@ -51,52 +58,54 @@ anything, it just runs what you give it.
    confident-signal up/down rates on held-out data aren't clearly above
    50%, the model found no real edge in this data — don't ship it. Try
    more history or a different symbol first.
-4. Commit the model into the repo so Koyeb picks it up on deploy:
+4. Commit the model into the repo so the deploy picks it up:
    ```
    git add ai_service/model.pkl
    git commit -m "Add trained model"
    git push
    ```
 
-### 2. Deploy on Koyeb
+### 2. Deploy on Render
 
-1. Sign up at koyeb.com and connect your GitHub account.
-2. Create a new App → select your GitHub repo.
-3. Set the **working directory / build context** to `ai_service`
-   (Koyeb supports deploying a subfolder of a repo — look for "Work
-   directory" or similar in the service settings).
-4. Builder: **Dockerfile** (one is already included in that folder).
-5. Under environment variables, add `API_KEY` = some random string you
+1. Sign up at render.com and connect your GitHub account.
+2. **New +** → **Web Service** → select the `mt5aibot` repo.
+3. Set **Root Directory** to `ai_service`.
+4. **Runtime**: Docker (Render auto-detects the `Dockerfile` already in
+   that folder).
+5. Under **Environment Variables**, add `API_KEY` = some random string you
    make up (e.g. a long password) — this is what stops random strangers on
    the internet from hitting your endpoint once it's public.
-6. Deploy. Koyeb gives you a URL like `https://your-app-name.koyeb.app`.
-7. Confirm it's alive: open `https://your-app-name.koyeb.app/health` in a
-   browser — should show `{"status": "ok", "model_loaded": true}`. If
+6. Under **Health Check Path**, set `/health` (so Render knows the service
+   is up correctly).
+7. Deploy. Render gives you a URL like `https://your-app-name.onrender.com`.
+8. Confirm it's alive: open `https://your-app-name.onrender.com/health` in
+   a browser — should show `{"status": "ok", "model_loaded": true}`. If
    `model_loaded` is `false`, the model.pkl commit didn't make it into the
    build — check step 4.
 
-**Free-tier note:** some Koyeb plans idle/sleep a service after a period
-of no traffic, which can make the *first* request after a quiet spell slow
-to respond. If the EA's proposals seem to lag right after a quiet period,
-that's likely why — not a bug.
+**Free-tier note:** Render's free web services spin down after ~15 minutes
+of no traffic and take 30-60 seconds to wake up on the next request. If the
+EA's first proposal after a quiet spell seems slow, that's why — not a bug.
+If that delay ever causes a missed signal window, an upgrade to Render's
+smallest paid tier removes the sleep behavior.
 
 ### 3. Point the EA at it
 
 In the EA's Inputs tab:
-- `InpAiServiceUrl` → `https://your-app-name.koyeb.app/predict`
-- `InpAiApiKey` → the same random string you set as `API_KEY` on Koyeb
+- `InpAiServiceUrl` → `https://your-app-name.onrender.com/predict`
+- `InpAiApiKey` → the same random string you set as `API_KEY` on Render
 
 Then whitelist it in MT5: **Tools → Options → Expert Advisors** →
 check "Allow WebRequest for listed URL" → add
-`https://your-app-name.koyeb.app` → OK.
+`https://your-app-name.onrender.com` → OK.
 
-That's it — your VPS only needs to run MT5. The AI brain lives on Koyeb.
+That's it — your VPS only needs to run MT5. The AI brain lives on Render.
 
 ---
 
 ## Option B — Run the AI service directly on the VPS
 
-Only do this if you'd rather not use Koyeb. Needs Python 3.10+ on the same
+Only do this if you'd rather not use Render. Needs Python 3.10+ on the same
 Windows VPS as MT5.
 
 1. Copy the `ai_service/` folder onto the VPS (e.g. `C:\ai_service\`).
@@ -126,7 +135,7 @@ The chart's status overlay shows the AI URL it's using, confirming it's
 wired up. If the Journal/Experts log shows repeated "WebRequest blocked" or
 "WebRequest ... failed" messages, re-check the whitelist step for whichever
 option you chose, and double check `InpAiApiKey` matches exactly if you're
-on Koyeb.
+on Render (or whichever platform you used).
 
 ## Everything else is unchanged
 
