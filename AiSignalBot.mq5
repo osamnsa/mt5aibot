@@ -20,7 +20,7 @@
 //--------------------------------------------------------------------
 // Inputs
 //--------------------------------------------------------------------
-input string          InpSymbols                   = "";      // Symbols to scan, comma-separated (empty = all Market Watch symbols)
+input string          InpSymbols                   = "BTC,ETH,XRP,BNB,XAUAUD,EURUSD,GBPUSD,USDCHF,USDJPY,XAUUSD,EURGBP,ZEC"; // Symbols to scan, comma-separated (empty = all Market Watch symbols). XAGUSD is M1-only, runs on a separate instance - don't add it here.
 input int             InpMaxSymbolsToScan          = 30;       // Safety cap on number of symbols scanned
 input ENUM_TIMEFRAMES InpTimeframe                 = PERIOD_M15; // Timeframe used for signals
 input string          InpAiServiceUrl              = "http://127.0.0.1:8787/predict"; // AI service endpoint (must be whitelisted in Options > Expert Advisors) - set to your Koyeb URL + /predict if hosted there
