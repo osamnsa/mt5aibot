@@ -29,6 +29,9 @@ input int             InpAiBarsToSend              = 120;      // How many recen
 input int             InpAtrPeriod                 = 14;       // ATR period (used for stop-loss/take-profit distance)
 input double          InpSLATRMult                 = 1.5;      // Stop-loss distance = ATR * this
 input double          InpTPATRMult                 = 3.0;      // Take-profit distance = ATR * this
+input bool            InpTrailingEnabled           = true;     // Trail the stop-loss on open bot positions as they move favorably
+input double          InpTrailingStartATR          = 1.0;      // Start trailing once profit reaches this many ATR
+input double          InpTrailingDistanceATR       = 1.5;      // Trailing stop stays this many ATR behind price once active
 input double          InpRiskPercent               = 0.1;      // Target risk per trade, % of balance
 input double          InpDailyLossLimitPercent     = 3.0;      // Stop proposing trades after this % daily equity loss
 input int             InpMagicNumber               = 990022;   // Magic number for this bot's orders
@@ -177,6 +180,7 @@ void BuildSymbolList()
 void OnTimer()
   {
    CheckDailyReset();
+   ManageTrailingStops(); // protect open positions regardless of halt/pending state
 
    if(g_haltedForDay)
      {
@@ -260,6 +264,87 @@ bool HasOpenBotTrade(string symbol)
          return true;
      }
    return false;
+  }
+
+//+------------------------------------------------------------------+
+double GetCurrentATR(string symbol)
+  {
+   int h = iATR(symbol, InpTimeframe, InpAtrPeriod);
+   if(h == INVALID_HANDLE)
+      return 0;
+   double buf[];
+   double result = 0;
+   if(CopyBuffer(h, 0, 1, 1, buf) >= 1)
+      result = buf[0];
+   IndicatorRelease(h);
+   return result;
+  }
+
+//+------------------------------------------------------------------+
+// Trail the SL behind price once a bot position is far enough in     |
+// profit (InpTrailingStartATR * ATR), keeping InpTrailingDistanceATR |
+// ATR of breathing room. Only ever tightens the stop, never loosens  |
+// it, and never touches the take-profit.                             |
+//+------------------------------------------------------------------+
+void ManageTrailingStops()
+  {
+   if(!InpTrailingEnabled)
+      return;
+
+   for(int i = 0; i < PositionsTotal(); i++)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber)
+         continue;
+
+      string symbol   = PositionGetString(POSITION_SYMBOL);
+      long   posType  = PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentSL = PositionGetDouble(POSITION_SL);
+      double currentTP = PositionGetDouble(POSITION_TP);
+
+      double atr = GetCurrentATR(symbol);
+      if(atr <= 0)
+         continue;
+
+      int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      double minStopDistance = (double)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+
+      if(posType == POSITION_TYPE_BUY)
+        {
+         double price = SymbolInfoDouble(symbol, SYMBOL_BID);
+         double profitDist = price - openPrice;
+         if(profitDist < InpTrailingStartATR * atr)
+            continue;
+
+         double desiredSL = NormalizeDouble(price - InpTrailingDistanceATR * atr, digits);
+         if(currentSL != 0 && desiredSL <= currentSL)
+            continue; // would loosen or no real change
+         if(price - desiredSL < minStopDistance)
+            continue; // too close to price for this broker to accept
+
+         if(trade.PositionModify(symbol, desiredSL, currentTP))
+            PrintFormat("Trailing stop updated for %s: SL -> %s", symbol, DoubleToString(desiredSL, digits));
+        }
+      else if(posType == POSITION_TYPE_SELL)
+        {
+         double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+         double profitDist = openPrice - price;
+         if(profitDist < InpTrailingStartATR * atr)
+            continue;
+
+         double desiredSL = NormalizeDouble(price + InpTrailingDistanceATR * atr, digits);
+         if(currentSL != 0 && desiredSL >= currentSL)
+            continue;
+         if(desiredSL - price < minStopDistance)
+            continue;
+
+         if(trade.PositionModify(symbol, desiredSL, currentTP))
+            PrintFormat("Trailing stop updated for %s: SL -> %s", symbol, DoubleToString(desiredSL, digits));
+        }
+     }
   }
 
 //+------------------------------------------------------------------+

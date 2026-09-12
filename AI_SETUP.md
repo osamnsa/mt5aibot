@@ -152,6 +152,17 @@ in that list with no trained model just gets skipped silently (checkable
 via `/health`'s `models_loaded` list) — it won't crash anything, but it
 also won't ever propose a trade until you train and deploy one for it.
 
+## Trailing stop
+
+Once a bot-opened position moves favorably by `InpTrailingStartATR` worth
+of ATR (default 1.0), the stop-loss starts trailing behind price at
+`InpTrailingDistanceATR` (default 1.5 ATR), tightening only — it never
+loosens the stop back, and never touches the take-profit. Set
+`InpTrailingEnabled` to `false` to turn this off and go back to a fixed
+SL/TP with no adjustment. This runs every scan regardless of the daily
+loss halt or a pending proposal, since protecting an already-open position
+is separate from opening new risk.
+
 ## Everything else is unchanged
 
 Risk sizing (`InpRiskPercent`), the daily loss kill-switch
