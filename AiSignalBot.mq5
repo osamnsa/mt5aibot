@@ -12,7 +12,7 @@
 //| broker until you click YES.                                       |
 //+------------------------------------------------------------------+
 #property copyright "AiSignalBot"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 #include <Trade\Trade.mqh>
