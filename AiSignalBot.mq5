@@ -12,7 +12,7 @@
 //| broker until you click YES.                                       |
 //+------------------------------------------------------------------+
 #property copyright "AiSignalBot"
-#property version   "1.10"
+#property version   "1.11"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -445,7 +445,7 @@ bool QueryAiService(string symbol, string &outDirection, double &outConfidence)
    string resultHeaders;
 
    ResetLastError();
-   int status = WebRequest("POST", InpAiServiceUrl, headers, 5000, postData, result, resultHeaders);
+   int status = WebRequest("POST", InpAiServiceUrl, headers, 60000, postData, result, resultHeaders);
    if(status == -1)
      {
       int err = GetLastError();
