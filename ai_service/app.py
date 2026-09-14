@@ -367,6 +367,7 @@ def health():
         "status": "ok",
         "models_loaded": sorted(MODELS.keys()),
         "direction_restrictions": {k: sorted(v) for k, v in DIRECTION_CONFIGS.items()},
+        "telegram_enabled": TELEGRAM_ENABLED,
     })
 
 
