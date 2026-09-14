@@ -38,12 +38,19 @@ def load_mt5_csv(path: str) -> pd.DataFrame:
 
     df.columns = [c.strip("<>").strip().lower() for c in df.columns]
 
+    epoch = pd.Timestamp("1970-01-01")
+
     if "date" in df.columns and "time" in df.columns:
         dt = pd.to_datetime(df["date"].astype(str) + " " + df["time"].astype(str),
                              errors="coerce")
-        df["time"] = dt.astype("int64") // 10**9
+        # Don't assume datetime64[ns]: pandas can infer us/ms/s resolution
+        # depending on version, and .astype("int64") // 10**9 silently gives
+        # the wrong answer (e.g. 1000x too small) if it guessed microseconds.
+        # Dividing by an actual Timedelta is resolution-independent.
+        df["time"] = ((dt - epoch) // pd.Timedelta(seconds=1)).astype("int64")
     elif "time" in df.columns:
-        df["time"] = pd.to_datetime(df["time"], errors="coerce").astype("int64") // 10**9
+        dt = pd.to_datetime(df["time"], errors="coerce")
+        df["time"] = ((dt - epoch) // pd.Timedelta(seconds=1)).astype("int64")
     else:
         df["time"] = np.arange(len(df))
 
