@@ -434,10 +434,7 @@ string GetServiceBaseUrl()
 
 string BuildServiceUrl(string path)
   {
-   string url = GetServiceBaseUrl() + path;
-   if(StringLen(InpAiApiKey) > 0)
-      url += "?key=" + InpAiApiKey;
-   return url;
+   return GetServiceBaseUrl() + path;
   }
 
 bool HttpGetJson(string url, string &outBody)
@@ -445,8 +442,11 @@ bool HttpGetJson(string url, string &outBody)
    uchar postData[];
    uchar result[];
    string resultHeaders;
+   string headers = "";
+   if(StringLen(InpAiApiKey) > 0)
+      headers = "X-API-Key: " + InpAiApiKey + "\r\n";
    ResetLastError();
-   int status = WebRequest("GET", url, "", 30000, postData, result, resultHeaders);
+   int status = WebRequest("GET", url, headers, 30000, postData, result, resultHeaders);
    if(status != 200)
       return false;
    outBody = CharArrayToString(result);
@@ -461,6 +461,8 @@ bool HttpPostJson(string url, string body, string &outBody)
    uchar result[];
    string resultHeaders;
    string headers = "Content-Type: application/json\r\n";
+   if(StringLen(InpAiApiKey) > 0)
+      headers += "X-API-Key: " + InpAiApiKey + "\r\n";
    ResetLastError();
    int status = WebRequest("POST", url, headers, 30000, postData, result, resultHeaders);
    if(status != 200)
