@@ -152,6 +152,33 @@ in that list with no trained model just gets skipped silently (checkable
 via `/health`'s `models_loaded` list) — it won't crash anything, but it
 also won't ever propose a trade until you train and deploy one for it.
 
+### Current roster (as of the last full re-validation)
+
+Every symbol below was checked with the full rigor pipeline: data-quality
+audit, a short-window-vs-long-window head-to-head scored on a shared
+holdout neither model trained on, and a final model trained on the full
+available history — shipped only if a side's de-overlapped 95% confidence
+interval clears 50%.
+
+**M15 — main EA instance**, `InpSymbols`:
+```
+BTC,ETH,EURUSD,GBPUSD,USDCHF,USDJPY
+```
+All six trade both directions.
+
+**M1 — separate EA instance** (`InpTimeframe = PERIOD_M1`), `InpSymbols`:
+```
+XAGUSD,XRP
+```
+Both are buy-only (`models/XAGUSD.json` and `models/XRP.json` disable
+sell) — neither symbol's sell side has ever cleared validation, and XRP
+specifically failed on M15 despite working on M1, so it must run on this
+M1 instance, not the main one.
+
+**Removed — no significant edge survives validation:** XAUUSD, EURGBP,
+ZEC, XAUAUD, BNB. Don't add these to `InpSymbols` unless re-tested against
+fresh data and re-validated.
+
 ## Trailing stop
 
 Once a bot-opened position moves favorably by `InpTrailingStartATR` worth
