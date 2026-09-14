@@ -28,17 +28,14 @@ In production (Render, or anywhere else) it's served via gunicorn - see
 the Dockerfile.
 
 If the API_KEY environment variable is set, every request except /health
-must include a matching key - either an "X-API-Key" header (what the EA
-sends) or a "?key=..." query parameter (what the phone approval page at
-/panel uses, so it can be a plain bookmarked link).
+and /telegram/webhook/<secret> must include a matching "X-API-Key" header.
 
-/panel is a phone-friendly page for approving/denying the EA's trade
-proposals remotely, alongside the existing desktop chart Yes/No buttons.
-A Telegram bot is a third channel doing the same thing, but with real
-push notifications carrying tappable Approve/Deny buttons (set
-TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET - see
-AI_SETUP.md). Whichever of the three answers first wins, the others
-clear automatically. This process holds the single current pending
+Trade proposals are approved two ways: the desktop MT5 chart's Yes/No
+buttons (free, always there when you're at the computer), or a Telegram
+bot with real push notifications carrying tappable Approve/Deny buttons
+(set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET - see
+AI_SETUP.md) for everywhere else. Whichever answers first wins, the other
+clears automatically. This process holds the single current pending
 proposal in memory, so it must run as exactly one worker process (see
 the Dockerfile's gunicorn -w 1) - multiple workers would each have their
 own copy and disagree.
@@ -52,7 +49,7 @@ import threading
 
 import pandas as pd
 import requests
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify
 import joblib
 
 from features import compute_indicator_frame, FEATURE_COLUMNS
@@ -132,10 +129,7 @@ def check_api_key():
         return None
     if request.path.startswith("/telegram/webhook/"):
         return None  # protected by the secret path segment instead - Telegram can't send our API key
-    if not API_KEY:
-        return None
-    supplied = request.headers.get("X-API-Key") or request.args.get("key")
-    if supplied != API_KEY:
+    if API_KEY and request.headers.get("X-API-Key") != API_KEY:
         return jsonify({"error": "unauthorized"}), 401
     return None
 
@@ -354,97 +348,6 @@ def telegram_webhook(secret):
 
     _telegram_api("answerCallbackQuery", callback_query_id=callback_id, text=ack_text)
     return jsonify({"ok": True})
-
-
-PANEL_HTML = """<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AiSignalBot</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background:#0d0d0d; color:#eee;
-         margin:0; padding:20px; }
-  .status { text-align:center; color:#888; margin-top:80px; font-size:16px; }
-  .card { background:#1a1a1a; border-radius:14px; padding:24px; margin-top:16px; }
-  .symbol { font-size:20px; font-weight:600; }
-  .dir { font-size:44px; font-weight:800; margin:8px 0; }
-  .buy { color:#3ddc84; } .sell { color:#ff5c5c; }
-  .detail { color:#aaa; font-size:14px; margin:4px 0; }
-  .warn { color:#ffa500; font-size:13px; margin-top:10px; }
-  .buttons { display:flex; gap:12px; margin-top:24px; }
-  button { flex:1; padding:20px; font-size:20px; font-weight:700; border:none; border-radius:12px; color:#fff; }
-  .yes { background:#1e7e34; } .no { background:#a52834; }
-  button:active { opacity:0.6; }
-</style>
-</head>
-<body>
-<div id="app"><div class="status">Loading...</div></div>
-<script>
-const params = new URLSearchParams(window.location.search);
-const key = params.get('key') || '';
-
-async function poll() {
-  try {
-    const res = await fetch('/proposal?key=' + encodeURIComponent(key));
-    if (res.status === 401) {
-      document.getElementById('app').innerHTML = '<div class="status">Wrong or missing key in the URL.</div>';
-      return;
-    }
-    render(await res.json());
-  } catch (e) {
-    document.getElementById('app').innerHTML = '<div class="status">Connection error, retrying...</div>';
-  }
-}
-
-function render(data) {
-  const app = document.getElementById('app');
-  if (!data.id || data.decision) {
-    app.innerHTML = '<div class="status">Waiting for a signal...</div>';
-    return;
-  }
-  const dirClass = data.direction === 'buy' ? 'buy' : 'sell';
-  const warn = (data.risk_pct && data.risk_pct > 1)
-    ? '<div class="warn">Risk is higher than usual for this trade - check it before approving.</div>'
-    : '';
-  app.innerHTML =
-    '<div class="card">' +
-      '<div class="symbol">' + data.symbol + '</div>' +
-      '<div class="dir ' + dirClass + '">' + data.direction.toUpperCase() + '</div>' +
-      '<div class="detail">Confidence: ' + Math.round(data.confidence * 100) + '%</div>' +
-      '<div class="detail">Lots: ' + data.lots + ' | Risk: $' + data.risk_money + ' (' + data.risk_pct + '%)</div>' +
-      '<div class="detail">Entry ~ ' + data.entry_approx + '</div>' +
-      warn +
-      '<div class="buttons">' +
-        '<button class="yes" onclick="decide(\\'' + data.id + '\\',\\'yes\\')">YES</button>' +
-        '<button class="no" onclick="decide(\\'' + data.id + '\\',\\'no\\')">NO</button>' +
-      '</div>' +
-    '</div>';
-}
-
-async function decide(id, decision) {
-  document.getElementById('app').innerHTML = '<div class="status">Sending...</div>';
-  try {
-    await fetch('/proposal/decide?key=' + encodeURIComponent(key), {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({id: id, decision: decision, decided_by: 'phone'})
-    });
-  } catch (e) {}
-  setTimeout(poll, 500);
-}
-
-poll();
-setInterval(poll, 3000);
-</script>
-</body>
-</html>
-"""
-
-
-@app.route("/panel", methods=["GET"])
-def panel():
-    return Response(PANEL_HTML, mimetype="text/html")
 
 
 @app.route("/health", methods=["GET"])

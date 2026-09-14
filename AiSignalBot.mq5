@@ -25,7 +25,7 @@ input int             InpMaxSymbolsToScan          = 30;       // Safety cap on 
 input ENUM_TIMEFRAMES InpTimeframe                 = PERIOD_M15; // Timeframe used for signals
 input string          InpAiServiceUrl              = "http://127.0.0.1:8787/predict"; // AI service endpoint (must be whitelisted in Options > Expert Advisors) - set to your Koyeb URL + /predict if hosted there
 input string          InpAiApiKey                  = "";       // Must match the API_KEY set on the AI service, once it's on the public internet (e.g. Koyeb)
-input bool            InpRemoteApprovalEnabled     = true;     // Let the /panel phone page approve/deny proposals too, alongside the desktop chart buttons
+input bool            InpRemoteApprovalEnabled     = true;     // Let the Telegram bot approve/deny proposals too, alongside the desktop chart buttons
 input int             InpAiBarsToSend              = 120;      // How many recent bars to send the AI service each query
 input int             InpAtrPeriod                 = 14;       // ATR period (used for stop-loss/take-profit distance)
 input double          InpSLATRMult                 = 1.5;      // Stop-loss distance = ATR * this
@@ -69,7 +69,7 @@ double   g_pendRiskPercentAct = 0;
 double   g_pendConfidence     = 0;
 datetime g_pendBarTime        = 0;
 datetime g_pendCreatedAt      = 0;
-string   g_pendRemoteId       = "";     // id of this proposal on the /panel phone approval service, if registered
+string   g_pendRemoteId       = "";     // id of this proposal on the Telegram approval service, if registered
 
 //--------------------------------------------------------------------
 // Daily loss tracking
@@ -417,10 +417,11 @@ string ExtractJsonValue(string json, string key)
   }
 
 //+------------------------------------------------------------------+
-// Phone remote-approval: the AI service also holds a single pending    |
-// proposal that /panel (a small mobile page) can answer. Whichever of |
-// the desktop chart or the phone answers first wins; the EA notifies  |
-// the service of a desktop answer, and polls it for a phone answer.   |
+// Remote approval: the AI service also holds a single pending proposal |
+// that a Telegram bot can answer with real Approve/Deny buttons.       |
+// Whichever of the desktop chart or Telegram answers first wins; the  |
+// EA notifies the service of a desktop answer, and polls it for a     |
+// Telegram answer.                                                     |
 //+------------------------------------------------------------------+
 string GetServiceBaseUrl()
   {

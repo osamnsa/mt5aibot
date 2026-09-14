@@ -163,48 +163,15 @@ SL/TP with no adjustment. This runs every scan regardless of the daily
 loss halt or a pending proposal, since protecting an already-open position
 is separate from opening new risk.
 
-## Approving trades from your phone (the /panel page)
+## Approving trades away from your desk (Telegram)
 
-Push notifications are text-only — MT5 has no way to put a clickable
-Yes/No button inside a phone notification, that's a platform limit, not
-something this project can work around. Instead, the AI service itself
-hosts a small mobile-friendly page that shows the current proposal and
-lets you tap YES/NO from your phone, no MT5 mobile app involved.
-
-**The link to bookmark on your phone:**
-```
-https://your-app-name.onrender.com/panel?key=YOUR_API_KEY
-```
-(same `API_KEY` value you set on Render / put in `InpAiApiKey`). Bookmark
-it once — it works immediately every time after that, no login prompt.
-
-How it behaves:
-- When the EA proposes a trade, it registers it with the AI service *and*
-  shows the usual desktop chart panel — both at once.
-- Open the bookmarked page and it shows the same symbol/direction/risk
-  details, with big YES/NO buttons.
-- **Whichever you answer first wins** — tap it on your phone, and the
-  desktop panel clears on its own within one scan interval (up to
-  `InpScanIntervalSeconds`, 30s by default). Click the desktop panel
-  instead, and the phone page clears itself the same way.
-- If a proposal is not needed on the desktop side and `InpConfirmLiveRiskUnderstood`
-  is `true`, tapping YES on the phone places the trade exactly the same
-  way clicking YES on the chart would.
-- Set `InpRemoteApprovalEnabled` to `false` to turn this off entirely and
-  go back to desktop-only approval.
-
-No new setup beyond what you already have — the phone panel is served by
-the same Render deployment you're already running.
-
-## Real push notifications with tappable buttons (Telegram)
-
-`/panel` only updates while you have it open — it can't buzz your phone
-on its own, that's just how a plain web page works. For an actual
-lock-screen notification with **Approve/Deny buttons built into the
-notification itself**, add a Telegram bot as a third channel. It plugs
-into the exact same pending-proposal system as `/panel` and the desktop
-chart — whichever of the three you answer first wins, no EA changes
-needed at all.
+MT5's own push notifications are text-only — there's no way to put a
+clickable Yes/No inside one, that's a platform limit. Telegram's bot API
+can: a message with real Approve/Deny buttons, delivered as a genuine
+lock-screen notification, no app-opening required. It plugs into the
+same pending-proposal system the desktop chart panel uses — whichever
+you answer first wins (Telegram or the desktop chart), the other clears
+itself automatically. No EA changes needed.
 
 ### 1. Create the bot (2 minutes, one-time)
 
@@ -242,11 +209,11 @@ A reply containing `"ok":true` means it's registered.
 
 ### That's it
 
-Every future proposal now also arrives as a real Telegram message with
+Every future proposal now arrives as a real Telegram message with
 **✅ YES** / **❌ NO** buttons attached — tap one right from the lock
-screen notification, no need to open anything first. Whichever channel
-(Telegram, phone `/panel`, or the desktop chart) you answer on, the
-other two clear themselves automatically.
+screen notification, no need to open anything first. Answer on Telegram
+or the desktop chart, whichever's in front of you; the other clears
+itself automatically.
 
 ## Everything else is unchanged
 
