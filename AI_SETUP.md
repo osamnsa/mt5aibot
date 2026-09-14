@@ -196,6 +196,58 @@ How it behaves:
 No new setup beyond what you already have — the phone panel is served by
 the same Render deployment you're already running.
 
+## Real push notifications with tappable buttons (Telegram)
+
+`/panel` only updates while you have it open — it can't buzz your phone
+on its own, that's just how a plain web page works. For an actual
+lock-screen notification with **Approve/Deny buttons built into the
+notification itself**, add a Telegram bot as a third channel. It plugs
+into the exact same pending-proposal system as `/panel` and the desktop
+chart — whichever of the three you answer first wins, no EA changes
+needed at all.
+
+### 1. Create the bot (2 minutes, one-time)
+
+1. In Telegram, message **@BotFather** → send `/newbot` → follow the
+   prompts (pick any name/username). It replies with a **bot token**
+   (looks like `123456789:AAExampleTokenAbc...`) — save it.
+2. Search for your new bot by its username and send it any message
+   (e.g. `/start`) so it knows about you.
+3. Find your own **chat ID**: open this URL in a browser (replace the
+   token), right after sending that message:
+   ```
+   https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
+   ```
+   Look for `"chat":{"id":123456789,...}` in the response — that number
+   is your chat ID.
+
+### 2. Configure Render
+
+Add three environment variables to the same Render service:
+- `TELEGRAM_BOT_TOKEN` → the token from step 1.
+- `TELEGRAM_CHAT_ID` → your chat ID from step 1.
+- `TELEGRAM_WEBHOOK_SECRET` → any random string you make up (a second
+  password, separate from `API_KEY` — this one protects the endpoint
+  Telegram itself calls, which can't send your `API_KEY`).
+
+Save, let it redeploy.
+
+### 3. Tell Telegram where to send button taps (one-time)
+
+Run this once, filling in your actual values:
+```
+curl "https://api.telegram.org/bot<YOUR_TOKEN>/setWebhook?url=https://your-app-name.onrender.com/telegram/webhook/<YOUR_WEBHOOK_SECRET>"
+```
+A reply containing `"ok":true` means it's registered.
+
+### That's it
+
+Every future proposal now also arrives as a real Telegram message with
+**✅ YES** / **❌ NO** buttons attached — tap one right from the lock
+screen notification, no need to open anything first. Whichever channel
+(Telegram, phone `/panel`, or the desktop chart) you answer on, the
+other two clear themselves automatically.
+
 ## Everything else is unchanged
 
 Risk sizing (`InpRiskPercent`), the daily loss kill-switch

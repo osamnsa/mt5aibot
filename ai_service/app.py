@@ -33,11 +33,15 @@ sends) or a "?key=..." query parameter (what the phone approval page at
 /panel uses, so it can be a plain bookmarked link).
 
 /panel is a phone-friendly page for approving/denying the EA's trade
-proposals remotely, alongside the existing desktop chart Yes/No buttons -
-whichever answers first wins, the other side clears automatically. This
-process holds the single current pending proposal in memory, so it must
-run as exactly one worker process (see the Dockerfile's gunicorn -w 1) -
-multiple workers would each have their own copy and disagree.
+proposals remotely, alongside the existing desktop chart Yes/No buttons.
+A Telegram bot is a third channel doing the same thing, but with real
+push notifications carrying tappable Approve/Deny buttons (set
+TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_WEBHOOK_SECRET - see
+AI_SETUP.md). Whichever of the three answers first wins, the others
+clear automatically. This process holds the single current pending
+proposal in memory, so it must run as exactly one worker process (see
+the Dockerfile's gunicorn -w 1) - multiple workers would each have their
+own copy and disagree.
 """
 import os
 import glob
@@ -47,6 +51,7 @@ import uuid
 import threading
 
 import pandas as pd
+import requests
 from flask import Flask, request, jsonify, Response
 import joblib
 
@@ -57,6 +62,11 @@ LEGACY_MODEL_PATH = "model.pkl"  # older single-model deployments
 CONFIDENCE_THRESHOLD = 0.60  # below this on both sides, respond "none"
 API_KEY = os.environ.get("API_KEY", "")
 PROPOSAL_MAX_AGE_SECONDS = 600  # stale-proposal safety net if the EA never clears one
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
 
 app = Flask(__name__)
 
@@ -120,6 +130,8 @@ def model_for_symbol(symbol: str):
 def check_api_key():
     if request.path == "/health":
         return None
+    if request.path.startswith("/telegram/webhook/"):
+        return None  # protected by the secret path segment instead - Telegram can't send our API key
     if not API_KEY:
         return None
     supplied = request.headers.get("X-API-Key") or request.args.get("key")
@@ -190,6 +202,68 @@ def _expire_if_stale():
         _pending_proposal = None
 
 
+def _telegram_api(method: str, **params):
+    if not TELEGRAM_ENABLED:
+        return None
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/{method}",
+            json=params, timeout=10,
+        )
+        return resp.json()
+    except Exception as e:
+        print(f"WARNING: Telegram API call '{method}' failed: {e}")
+        return None
+
+
+def send_telegram_proposal(proposal: dict):
+    if not TELEGRAM_ENABLED:
+        return
+    warn = ("\n⚠️ Risk is higher than usual for this trade - check it before approving."
+            if proposal.get("risk_pct", 0) > 1 else "")
+    text = (
+        f"{proposal['symbol']}  {proposal['direction'].upper()}\n"
+        f"Confidence: {round(proposal['confidence'] * 100)}%\n"
+        f"Lots: {proposal['lots']}  |  Risk: ${proposal['risk_money']} ({proposal['risk_pct']}%)\n"
+        f"Entry ~ {proposal['entry_approx']}"
+        f"{warn}"
+    )
+    keyboard = {
+        "inline_keyboard": [[
+            {"text": "✅ YES", "callback_data": f"yes:{proposal['id']}"},
+            {"text": "❌ NO", "callback_data": f"no:{proposal['id']}"},
+        ]]
+    }
+    result = _telegram_api("sendMessage", chat_id=TELEGRAM_CHAT_ID, text=text, reply_markup=keyboard)
+    if result and result.get("ok"):
+        proposal["telegram_message_id"] = result["result"]["message_id"]
+
+
+def _finalize_telegram_message(proposal: dict, decision: str, decided_by: str):
+    message_id = proposal.get("telegram_message_id")
+    if not TELEGRAM_ENABLED or not message_id:
+        return
+    label = "✅ APPROVED" if decision == "yes" else "❌ DECLINED"
+    text = f"{proposal['symbol']}  {proposal['direction'].upper()}\n\n{label} (via {decided_by})"
+    _telegram_api("editMessageText", chat_id=TELEGRAM_CHAT_ID, message_id=message_id, text=text)
+
+
+def _apply_decision(proposal_id: str, decision: str, decided_by: str) -> bool:
+    """Shared by the HTTP /proposal/decide route and the Telegram webhook.
+    Returns True if this call actually recorded the decision."""
+    with _proposal_lock:
+        _expire_if_stale()
+        if _pending_proposal is None or _pending_proposal["id"] != proposal_id:
+            return False
+        if _pending_proposal["decision"] is not None:
+            return False
+        _pending_proposal["decision"] = decision
+        _pending_proposal["decided_by"] = decided_by
+        proposal_copy = dict(_pending_proposal)
+    _finalize_telegram_message(proposal_copy, decision, decided_by)
+    return True
+
+
 @app.route("/propose", methods=["POST"])
 def propose():
     global _pending_proposal
@@ -212,7 +286,15 @@ def propose():
             "created_at": time.time(),
             "decision": None,
             "decided_by": None,
+            "telegram_message_id": None,
         }
+        proposal_snapshot = dict(_pending_proposal)
+
+    send_telegram_proposal(proposal_snapshot)
+    with _proposal_lock:
+        if _pending_proposal is not None and _pending_proposal["id"] == proposal_id:
+            _pending_proposal["telegram_message_id"] = proposal_snapshot.get("telegram_message_id")
+
     return jsonify({"id": proposal_id})
 
 
@@ -235,13 +317,7 @@ def decide_proposal():
     if decision not in ("yes", "no"):
         return jsonify({"ok": False, "reason": "decision must be 'yes' or 'no'"}), 400
 
-    with _proposal_lock:
-        _expire_if_stale()
-        if _pending_proposal is None or _pending_proposal["id"] != proposal_id:
-            return jsonify({"ok": False, "reason": "no matching pending proposal (may have expired)"}), 200
-        if _pending_proposal["decision"] is None:
-            _pending_proposal["decision"] = decision
-            _pending_proposal["decided_by"] = decided_by
+    _apply_decision(proposal_id, decision, decided_by)  # no-op if already decided/expired, that's fine
     return jsonify({"ok": True})
 
 
@@ -253,6 +329,30 @@ def clear_proposal():
     with _proposal_lock:
         if _pending_proposal is not None and (not proposal_id or _pending_proposal["id"] == proposal_id):
             _pending_proposal = None
+    return jsonify({"ok": True})
+
+
+@app.route("/telegram/webhook/<secret>", methods=["POST"])
+def telegram_webhook(secret):
+    if not TELEGRAM_WEBHOOK_SECRET or secret != TELEGRAM_WEBHOOK_SECRET:
+        return jsonify({"error": "unauthorized"}), 401
+
+    update = request.get_json(force=True, silent=True) or {}
+    callback = update.get("callback_query")
+    if not callback:
+        return jsonify({"ok": True})  # ignore anything that isn't a button tap
+
+    data = callback.get("data", "")
+    callback_id = callback.get("id", "")
+    decision, _, proposal_id = data.partition(":")
+
+    if decision in ("yes", "no") and proposal_id:
+        applied = _apply_decision(proposal_id, decision, "telegram")
+        ack_text = "Got it!" if applied else "Already handled or expired."
+    else:
+        ack_text = "Unrecognized action."
+
+    _telegram_api("answerCallbackQuery", callback_query_id=callback_id, text=ack_text)
     return jsonify({"ok": True})
 
 
