@@ -332,9 +332,20 @@ def telegram_webhook(secret):
         return jsonify({"error": "unauthorized"}), 401
 
     update = request.get_json(force=True, silent=True) or {}
+
+    message = update.get("message")
+    if message:
+        chat_id = message.get("chat", {}).get("id")
+        if chat_id is not None:
+            _telegram_api(
+                "sendMessage", chat_id=chat_id,
+                text="Bot is connected. Trade proposals with ✅/❌ buttons will show up here.",
+            )
+        return jsonify({"ok": True})
+
     callback = update.get("callback_query")
     if not callback:
-        return jsonify({"ok": True})  # ignore anything that isn't a button tap
+        return jsonify({"ok": True})  # ignore anything else
 
     data = callback.get("data", "")
     callback_id = callback.get("id", "")
