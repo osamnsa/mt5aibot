@@ -10,4 +10,6 @@ COPY . .
 ENV PORT=8000
 EXPOSE 8000
 
-CMD ["sh", "-c", "gunicorn -w 2 -b 0.0.0.0:${PORT} app:app"]
+# -w 1: the pending-proposal state lives in this process's memory - more
+# than one worker would each hold a separate, disagreeing copy.
+CMD ["sh", "-c", "gunicorn -w 1 -b 0.0.0.0:${PORT} app:app"]

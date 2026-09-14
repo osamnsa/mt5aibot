@@ -163,6 +163,39 @@ SL/TP with no adjustment. This runs every scan regardless of the daily
 loss halt or a pending proposal, since protecting an already-open position
 is separate from opening new risk.
 
+## Approving trades from your phone (the /panel page)
+
+Push notifications are text-only — MT5 has no way to put a clickable
+Yes/No button inside a phone notification, that's a platform limit, not
+something this project can work around. Instead, the AI service itself
+hosts a small mobile-friendly page that shows the current proposal and
+lets you tap YES/NO from your phone, no MT5 mobile app involved.
+
+**The link to bookmark on your phone:**
+```
+https://your-app-name.onrender.com/panel?key=YOUR_API_KEY
+```
+(same `API_KEY` value you set on Render / put in `InpAiApiKey`). Bookmark
+it once — it works immediately every time after that, no login prompt.
+
+How it behaves:
+- When the EA proposes a trade, it registers it with the AI service *and*
+  shows the usual desktop chart panel — both at once.
+- Open the bookmarked page and it shows the same symbol/direction/risk
+  details, with big YES/NO buttons.
+- **Whichever you answer first wins** — tap it on your phone, and the
+  desktop panel clears on its own within one scan interval (up to
+  `InpScanIntervalSeconds`, 30s by default). Click the desktop panel
+  instead, and the phone page clears itself the same way.
+- If a proposal is not needed on the desktop side and `InpConfirmLiveRiskUnderstood`
+  is `true`, tapping YES on the phone places the trade exactly the same
+  way clicking YES on the chart would.
+- Set `InpRemoteApprovalEnabled` to `false` to turn this off entirely and
+  go back to desktop-only approval.
+
+No new setup beyond what you already have — the phone panel is served by
+the same Render deployment you're already running.
+
 ## Everything else is unchanged
 
 Risk sizing (`InpRiskPercent`), the daily loss kill-switch

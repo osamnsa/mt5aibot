@@ -12,7 +12,7 @@
 //| broker until you click YES.                                       |
 //+------------------------------------------------------------------+
 #property copyright "AiSignalBot"
-#property version   "1.11"
+#property version   "1.20"
 #property strict
 
 #include <Trade\Trade.mqh>
@@ -25,6 +25,7 @@ input int             InpMaxSymbolsToScan          = 30;       // Safety cap on 
 input ENUM_TIMEFRAMES InpTimeframe                 = PERIOD_M15; // Timeframe used for signals
 input string          InpAiServiceUrl              = "http://127.0.0.1:8787/predict"; // AI service endpoint (must be whitelisted in Options > Expert Advisors) - set to your Koyeb URL + /predict if hosted there
 input string          InpAiApiKey                  = "";       // Must match the API_KEY set on the AI service, once it's on the public internet (e.g. Koyeb)
+input bool            InpRemoteApprovalEnabled     = true;     // Let the /panel phone page approve/deny proposals too, alongside the desktop chart buttons
 input int             InpAiBarsToSend              = 120;      // How many recent bars to send the AI service each query
 input int             InpAtrPeriod                 = 14;       // ATR period (used for stop-loss/take-profit distance)
 input double          InpSLATRMult                 = 1.5;      // Stop-loss distance = ATR * this
@@ -68,6 +69,7 @@ double   g_pendRiskPercentAct = 0;
 double   g_pendConfidence     = 0;
 datetime g_pendBarTime        = 0;
 datetime g_pendCreatedAt      = 0;
+string   g_pendRemoteId       = "";     // id of this proposal on the /panel phone approval service, if registered
 
 //--------------------------------------------------------------------
 // Daily loss tracking
@@ -188,10 +190,26 @@ void OnTimer()
       return;
      }
 
+   if(g_pendingActive)
+     {
+      string remoteDecision = PollRemoteDecision();
+      if(remoteDecision == "yes")
+        {
+         Print("Proposal for ", g_pendSymbol, " approved from the phone panel.");
+         HandleYes();
+        }
+      else if(remoteDecision == "no")
+        {
+         Print("Proposal for ", g_pendSymbol, " declined from the phone panel.");
+         HandleNo();
+        }
+     }
+
    if(g_pendingActive && (TimeCurrent() - g_pendCreatedAt) > InpProposalTimeoutSeconds)
      {
       Print("Proposal for ", g_pendSymbol, " timed out with no response - dismissed.");
       RemoveProposalPanel();
+      ClearRemoteProposal();
       g_pendingActive = false;
      }
 
@@ -399,6 +417,118 @@ string ExtractJsonValue(string json, string key)
   }
 
 //+------------------------------------------------------------------+
+// Phone remote-approval: the AI service also holds a single pending    |
+// proposal that /panel (a small mobile page) can answer. Whichever of |
+// the desktop chart or the phone answers first wins; the EA notifies  |
+// the service of a desktop answer, and polls it for a phone answer.   |
+//+------------------------------------------------------------------+
+string GetServiceBaseUrl()
+  {
+   string url = InpAiServiceUrl;
+   int pos = StringFind(url, "/predict");
+   if(pos >= 0)
+      return StringSubstr(url, 0, pos);
+   return url;
+  }
+
+string BuildServiceUrl(string path)
+  {
+   string url = GetServiceBaseUrl() + path;
+   if(StringLen(InpAiApiKey) > 0)
+      url += "?key=" + InpAiApiKey;
+   return url;
+  }
+
+bool HttpGetJson(string url, string &outBody)
+  {
+   uchar postData[];
+   uchar result[];
+   string resultHeaders;
+   ResetLastError();
+   int status = WebRequest("GET", url, "", 30000, postData, result, resultHeaders);
+   if(status != 200)
+      return false;
+   outBody = CharArrayToString(result);
+   return true;
+  }
+
+bool HttpPostJson(string url, string body, string &outBody)
+  {
+   uchar postData[];
+   int rawLen = StringToCharArray(body, postData);
+   ArrayResize(postData, rawLen - 1);
+   uchar result[];
+   string resultHeaders;
+   string headers = "Content-Type: application/json\r\n";
+   ResetLastError();
+   int status = WebRequest("POST", url, headers, 30000, postData, result, resultHeaders);
+   if(status != 200)
+      return false;
+   outBody = CharArrayToString(result);
+   return true;
+  }
+
+void RegisterRemoteProposal(string symbol, string direction, double confidence, double lots,
+                             double riskMoney, double riskPct, double entryApprox, int digits)
+  {
+   g_pendRemoteId = "";
+   if(!InpRemoteApprovalEnabled)
+      return;
+
+   string body = StringFormat(
+      "{\"symbol\":\"%s\",\"direction\":\"%s\",\"confidence\":%s,\"lots\":\"%s\",\"risk_money\":%s,\"risk_pct\":%s,\"entry_approx\":\"%s\"}",
+      symbol, direction, DoubleToString(confidence, 4), DoubleToString(lots, 2),
+      DoubleToString(riskMoney, 2), DoubleToString(riskPct, 2), DoubleToString(entryApprox, digits));
+
+   string resp;
+   if(!HttpPostJson(BuildServiceUrl("/propose"), body, resp))
+     {
+      Print("Remote approval: could not register proposal with the phone panel - desktop Yes/No still works.");
+      return;
+     }
+   g_pendRemoteId = ExtractJsonValue(resp, "id");
+  }
+
+// Returns "yes"/"no" once the phone has answered this exact proposal, else "".
+string PollRemoteDecision()
+  {
+   if(!InpRemoteApprovalEnabled || g_pendRemoteId == "")
+      return "";
+
+   string resp;
+   if(!HttpGetJson(BuildServiceUrl("/proposal"), resp))
+      return "";
+
+   if(ExtractJsonValue(resp, "id") != g_pendRemoteId)
+      return "";
+
+   string decision = ExtractJsonValue(resp, "decision");
+   if(decision == "yes" || decision == "no")
+      return decision;
+   return "";
+  }
+
+// Tell the phone panel a decision was made on the desktop, so it updates too.
+void PostRemoteDecision(string decision)
+  {
+   if(!InpRemoteApprovalEnabled || g_pendRemoteId == "")
+      return;
+   string body = StringFormat("{\"id\":\"%s\",\"decision\":\"%s\",\"decided_by\":\"desktop\"}", g_pendRemoteId, decision);
+   string resp;
+   HttpPostJson(BuildServiceUrl("/proposal/decide"), body, resp);
+  }
+
+void ClearRemoteProposal()
+  {
+   if(g_pendRemoteId == "")
+      return;
+   string body = StringFormat("{\"id\":\"%s\"}", g_pendRemoteId);
+   string resp;
+   HttpPostJson(BuildServiceUrl("/proposal/clear"), body, resp);
+   g_pendRemoteId = "";
+  }
+
+//+------------------------------------------------------------------+
 // Query the AI service for one symbol's latest direction/confidence. |
 //+------------------------------------------------------------------+
 bool QueryAiService(string symbol, string &outDirection, double &outConfidence)
@@ -579,10 +709,14 @@ void ScanForSignal()
 
       ShowProposalPanel();
 
+      int symDigits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+      RegisterRemoteProposal(sym, (dirCode == 1 ? "buy" : "sell"), confidence, lots,
+                              riskMoney, actualRiskPct, price, symDigits);
+
       string dirWord = (dirCode == 1) ? "BUY" : "SELL";
       SendPush(StringFormat("%s %s (%.0f%% conf)  lots %s  risk $%.2f (%.1f%%)  entry ~%s",
                              sym, dirWord, confidence * 100.0, DoubleToString(lots, 2), riskMoney, actualRiskPct,
-                             DoubleToString(price, (int)SymbolInfoInteger(sym, SYMBOL_DIGITS))));
+                             DoubleToString(price, symDigits)));
 
       return; // only propose one signal per scan
      }
@@ -699,6 +833,8 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
 void HandleNo()
   {
    Print("Proposal declined by user: ", g_pendSymbol, " ", (g_pendDirection == 1 ? "BUY" : "SELL"));
+   PostRemoteDecision("no"); // no-op if this came from the phone already, or remote approval is off
+   ClearRemoteProposal();
    RemoveProposalPanel();
    g_pendingActive = false;
   }
@@ -710,6 +846,8 @@ void HandleYes()
    int dir = g_pendDirection;
    double lots = g_pendLots;
 
+   PostRemoteDecision("yes"); // no-op if this came from the phone already, or remote approval is off
+   ClearRemoteProposal();
    RemoveProposalPanel();
    g_pendingActive = false;
 
