@@ -26,16 +26,17 @@ import argparse
 import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier
 
-from features import FEATURE_COLUMNS
+from features import FEATURE_COLUMNS, wald_ci
 from train_model import load_mt5_csv, build_dataset
 
 
-def wald_ci(successes: int, n: int, z: float = 1.96):
-    if n == 0:
-        return (float("nan"), float("nan"))
-    p = successes / n
-    se = (p * (1 - p) / n) ** 0.5
-    return (max(0.0, p - z * se), min(1.0, p + z * se))
+def _deoverlap(idx_list, min_gap):
+    kept, last = [], -10 ** 9
+    for i in idx_list:
+        if i - last >= min_gap:
+            kept.append(i)
+            last = i
+    return kept
 
 
 def evaluate(model, df_slice: pd.DataFrame, horizon: int, move_threshold_atr: float):
@@ -43,20 +44,40 @@ def evaluate(model, df_slice: pd.DataFrame, horizon: int, move_threshold_atr: fl
     if data.empty:
         return None
     proba_up = model.predict_proba(data[FEATURE_COLUMNS])[:, 1]
-    y = data["label"]
+    data = data.reset_index(drop=True)
 
-    confident_up = proba_up > 0.6
-    confident_down = proba_up < 0.4
-    up_n, down_n = int(confident_up.sum()), int(confident_down.sum())
-    up_hits = int(y[confident_up].sum())
-    down_hits = int((1 - y[confident_down]).sum())
+    buy_idx = data.index[proba_up > 0.6].tolist()
+    sell_idx = data.index[proba_up < 0.4].tolist()
+    buy_idx_do = _deoverlap(buy_idx, horizon)
+    sell_idx_do = _deoverlap(sell_idx, horizon)
+
+    def stats(idx_list, is_buy):
+        n = len(idx_list)
+        if n == 0:
+            return n, float("nan"), (float("nan"), float("nan"))
+        labels = data.loc[idx_list, "label"]
+        hits = int(labels.sum()) if is_buy else int((1 - labels).sum())
+        return n, hits / n, wald_ci(hits, n)
+
+    buy_n, buy_rate, buy_ci = stats(buy_idx, True)
+    sell_n, sell_rate, sell_ci = stats(sell_idx, False)
+    buy_n2, buy_rate2, buy_ci2 = stats(buy_idx_do, True)
+    sell_n2, sell_rate2, sell_ci2 = stats(sell_idx_do, False)
 
     return {
-        "buy_n": up_n, "buy_rate": (up_hits / up_n) if up_n else float("nan"),
-        "buy_ci": wald_ci(up_hits, up_n),
-        "sell_n": down_n, "sell_rate": (down_hits / down_n) if down_n else float("nan"),
-        "sell_ci": wald_ci(down_hits, down_n),
+        "buy_n": buy_n, "buy_rate": buy_rate, "buy_ci": buy_ci,
+        "buy_n_do": buy_n2, "buy_rate_do": buy_rate2, "buy_ci_do": buy_ci2,
+        "sell_n": sell_n, "sell_rate": sell_rate, "sell_ci": sell_ci,
+        "sell_n_do": sell_n2, "sell_rate_do": sell_rate2, "sell_ci_do": sell_ci2,
     }
+
+
+def _fmt_line(side, n, rate, ci):
+    if n == 0:
+        return f"  {side.upper():5s} n=0"
+    significant = "yes" if ci[0] > 0.5 else "no"
+    return (f"  {side.upper():5s} n={n:4d}  rate={rate * 100:5.1f}%  "
+            f"95% CI=[{ci[0] * 100:.1f}%, {ci[1] * 100:.1f}%]  significant={significant}")
 
 
 def print_result(label: str, result):
@@ -65,13 +86,10 @@ def print_result(label: str, result):
         print("No usable holdout rows.")
         return
     for side in ["buy", "sell"]:
-        n = result[f"{side}_n"]
-        rate = result[f"{side}_rate"]
-        lo, hi = result[f"{side}_ci"]
-        significant = "yes" if (n > 0 and lo > 0.5) else "no"
-        rate_str = f"{rate * 100:5.1f}%" if n else "  n/a"
-        ci_str = f"[{lo * 100:.1f}%, {hi * 100:.1f}%]" if n else "n/a"
-        print(f"  {side.upper():5s} n={n:4d}  rate={rate_str}  95% CI={ci_str}  significant={significant}")
+        print("  (raw, overlapping)")
+        print(_fmt_line(side, result[f"{side}_n"], result[f"{side}_rate"], result[f"{side}_ci"]))
+        print("  (de-overlapped - the one to trust)")
+        print(_fmt_line(side, result[f"{side}_n_do"], result[f"{side}_rate_do"], result[f"{side}_ci_do"]))
 
 
 def main():

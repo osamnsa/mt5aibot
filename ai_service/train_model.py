@@ -25,7 +25,7 @@ import joblib
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.metrics import classification_report
 
-from features import compute_indicator_frame, FEATURE_COLUMNS
+from features import compute_indicator_frame, FEATURE_COLUMNS, wald_ci
 
 
 def load_mt5_csv(path: str) -> pd.DataFrame:
@@ -120,20 +120,47 @@ def main():
     print(classification_report(y_test, preds, target_names=["down", "up"]))
 
     proba_up = model.predict_proba(X_test)[:, 1]
-    confident_up = proba_up > 0.6
-    confident_down = proba_up < 0.4
+    test_reset = test.reset_index(drop=True)
+    confident_up_idx = test_reset.index[proba_up > 0.6].tolist()
+    confident_down_idx = test_reset.index[proba_up < 0.4].tolist()
 
-    up_rate = y_test[confident_up].mean() if confident_up.sum() else float("nan")
-    down_rate = (1 - y_test[confident_down]).mean() if confident_down.sum() else float("nan")
+    def raw_stats(idx_list, hit_col_is_up):
+        n = len(idx_list)
+        if n == 0:
+            return n, float("nan"), (float("nan"), float("nan"))
+        labels = test_reset.loc[idx_list, "label"]
+        hits = int(labels.sum()) if hit_col_is_up else int((1 - labels).sum())
+        return n, hits / n, wald_ci(hits, n)
 
-    print(f"Confident BUY signals in test set: {int(confident_up.sum())}, "
-          f"actual up-rate among them: {up_rate:.1%}" if confident_up.sum() else
-          "Confident BUY signals in test set: 0")
-    print(f"Confident SELL signals in test set: {int(confident_down.sum())}, "
-          f"actual down-rate among them: {down_rate:.1%}" if confident_down.sum() else
-          "Confident SELL signals in test set: 0")
-    print("\nIf those rates aren't clearly and consistently above 50%, this model has no "
-          "demonstrated edge on this data - do not point real money at it as-is.")
+    def deoverlapped_stats(idx_list, hit_col_is_up, min_gap):
+        kept, last = [], -10 ** 9
+        for i in idx_list:
+            if i - last >= min_gap:
+                kept.append(i)
+                last = i
+        return raw_stats(kept, hit_col_is_up)
+
+    up_n, up_rate, up_ci = raw_stats(confident_up_idx, True)
+    down_n, down_rate, down_ci = raw_stats(confident_down_idx, False)
+    up_n2, up_rate2, up_ci2 = deoverlapped_stats(confident_up_idx, True, args.horizon)
+    down_n2, down_rate2, down_ci2 = deoverlapped_stats(confident_down_idx, False, args.horizon)
+
+    def sig(ci):
+        return "yes" if ci[0] > 0.5 else "no"
+
+    def fmt(n, rate, ci):
+        if n == 0:
+            return "n=0"
+        return f"n={n:4d}  rate={rate * 100:5.1f}%  95% CI=[{ci[0] * 100:.1f}%, {ci[1] * 100:.1f}%]  significant={sig(ci)}"
+
+    print(f"\nConfident BUY  (raw, overlapping):     {fmt(up_n, up_rate, up_ci)}")
+    print(f"Confident BUY  (de-overlapped, >= {args.horizon} bars apart): {fmt(up_n2, up_rate2, up_ci2)}")
+    print(f"Confident SELL (raw, overlapping):     {fmt(down_n, down_rate, down_ci)}")
+    print(f"Confident SELL (de-overlapped, >= {args.horizon} bars apart): {fmt(down_n2, down_rate2, down_ci2)}")
+    print("\nOverlapping confident signals share price history and aren't independent - the "
+          "de-overlapped row is the more honest test. Trust a side only if its de-overlapped "
+          "95% CI clears 50% - a good raw rate on a shrinking de-overlapped sample is a warning "
+          "sign, not a green light.")
 
     joblib.dump(model, args.out)
     print(f"\nSaved model to {args.out}")

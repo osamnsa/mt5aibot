@@ -19,6 +19,17 @@ FEATURE_COLUMNS = [
 ]
 
 
+def wald_ci(successes: int, n: int, z: float = 1.96):
+    """95% confidence interval for a binomial rate, e.g. a confident-signal
+    hit rate. Shared by train_model.py and compare_models.py so "is this
+    edge statistically significant" always means the same thing."""
+    if n == 0:
+        return (float("nan"), float("nan"))
+    p = successes / n
+    se = (p * (1 - p) / n) ** 0.5
+    return (max(0.0, p - z * se), min(1.0, p + z * se))
+
+
 def compute_indicator_frame(df: pd.DataFrame) -> pd.DataFrame:
     """
     df must have columns: time (unix seconds), open, high, low, close,
