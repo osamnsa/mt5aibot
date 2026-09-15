@@ -78,6 +78,11 @@ double   g_dayStartBalance = 0;
 int      g_dayOfYear       = -1;
 bool     g_haltedForDay    = false;
 
+//--------------------------------------------------------------------
+// Closed-trade notifications
+//--------------------------------------------------------------------
+datetime g_lastHistoryCheck = 0;
+
 CTrade   trade;
 
 #define OBJ_PREFIX "AISB_"
@@ -105,6 +110,7 @@ int OnInit()
    g_dayOfYear = dt.day_of_year;
    g_dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    g_haltedForDay = false;
+   g_lastHistoryCheck = TimeCurrent();
 
    EventSetTimer(MathMax(5, InpScanIntervalSeconds));
 
@@ -183,6 +189,7 @@ void OnTimer()
   {
    CheckDailyReset();
    ManageTrailingStops(); // protect open positions regardless of halt/pending state
+   NotifyClosedTrades();  // report closed positions regardless of halt/pending state
 
    if(g_haltedForDay)
      {
@@ -362,6 +369,54 @@ void ManageTrailingStops()
          if(trade.PositionModify(symbol, desiredSL, currentTP))
             PrintFormat("Trailing stop updated for %s: SL -> %s", symbol, DoubleToString(desiredSL, digits));
         }
+     }
+  }
+
+//+------------------------------------------------------------------+
+// Report this bot's closed positions (Telegram + push), since the last check |
+//+------------------------------------------------------------------+
+void NotifyClosedTrades()
+  {
+   datetime from = g_lastHistoryCheck;
+   datetime to   = TimeCurrent();
+   g_lastHistoryCheck = to;
+
+   if(!HistorySelect(from, to))
+      return;
+
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++)
+     {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0)
+         continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber)
+         continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_ENTRY) != DEAL_ENTRY_OUT)
+         continue;
+
+      string symbol  = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+      double profit  = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                      + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
+                      + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      double volume  = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+      double price   = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      long   dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+      // the exit deal's type is opposite the position's original direction
+      string dirWord = (dealType == DEAL_TYPE_SELL) ? "BUY closed" : "SELL closed";
+      string outcome = (profit >= 0) ? "WIN" : "LOSS";
+      int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+
+      string telegramMsg = StringFormat("%s %s\\n%s  %s lots @ %s\\nP/L: $%s",
+                                         symbol, dirWord, outcome, DoubleToString(volume, 2),
+                                         DoubleToString(price, digits), DoubleToString(profit, 2));
+      string body = StringFormat("{\"text\":\"%s\"}", telegramMsg);
+      string resp;
+      HttpPostJson(BuildServiceUrl("/notify"), body, resp);
+
+      SendPush(StringFormat("%s %s - %s  %s lots @ %s  P/L $%s",
+                             symbol, dirWord, outcome, DoubleToString(volume, 2),
+                             DoubleToString(price, digits), DoubleToString(profit, 2)));
      }
   }
 

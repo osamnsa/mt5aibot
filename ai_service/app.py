@@ -193,7 +193,9 @@ def predict():
 def _expire_if_stale():
     global _pending_proposal
     if _pending_proposal and (time.time() - _pending_proposal["created_at"]) > PROPOSAL_MAX_AGE_SECONDS:
+        expired = dict(_pending_proposal)
         _pending_proposal = None
+        _finalize_telegram_message(expired, "expired", "timeout")
 
 
 def _telegram_api(method: str, **params):
@@ -237,9 +239,16 @@ def _finalize_telegram_message(proposal: dict, decision: str, decided_by: str):
     message_id = proposal.get("telegram_message_id")
     if not TELEGRAM_ENABLED or not message_id:
         return
-    label = "✅ APPROVED" if decision == "yes" else "❌ DECLINED"
-    text = f"{proposal['symbol']}  {proposal['direction'].upper()}\n\n{label} (via {decided_by})"
-    _telegram_api("editMessageText", chat_id=TELEGRAM_CHAT_ID, message_id=message_id, text=text)
+    if decision == "yes":
+        label = "✅ APPROVED"
+    elif decision == "no":
+        label = "❌ DECLINED"
+    else:
+        label = "⏱ MISSED - no response in time, buttons no longer work on this one"
+    suffix = "" if decision == "expired" else f" (via {decided_by})"
+    text = f"{proposal['symbol']}  {proposal['direction'].upper()}\n\n{label}{suffix}"
+    _telegram_api("editMessageText", chat_id=TELEGRAM_CHAT_ID, message_id=message_id, text=text,
+                  reply_markup={"inline_keyboard": []})
 
 
 def _apply_decision(proposal_id: str, decision: str, decided_by: str) -> bool:
@@ -267,6 +276,10 @@ def propose():
         return jsonify({"error": f"missing one of {required}"}), 400
 
     with _proposal_lock:
+        if _pending_proposal is not None and _pending_proposal["decision"] is None:
+            superseded = dict(_pending_proposal)
+        else:
+            superseded = None
         proposal_id = uuid.uuid4().hex
         _pending_proposal = {
             "id": proposal_id,
@@ -284,6 +297,8 @@ def propose():
         }
         proposal_snapshot = dict(_pending_proposal)
 
+    if superseded is not None:
+        _finalize_telegram_message(superseded, "expired", "timeout")
     send_telegram_proposal(proposal_snapshot)
     with _proposal_lock:
         if _pending_proposal is not None and _pending_proposal["id"] == proposal_id:
@@ -358,6 +373,16 @@ def telegram_webhook(secret):
         ack_text = "Unrecognized action."
 
     _telegram_api("answerCallbackQuery", callback_query_id=callback_id, text=ack_text)
+    return jsonify({"ok": True})
+
+
+@app.route("/notify", methods=["POST"])
+def notify():
+    payload = request.get_json(force=True, silent=True) or {}
+    text = payload.get("text", "").strip()
+    if not text:
+        return jsonify({"error": "missing 'text'"}), 400
+    _telegram_api("sendMessage", chat_id=TELEGRAM_CHAT_ID, text=text)
     return jsonify({"ok": True})
 
 
