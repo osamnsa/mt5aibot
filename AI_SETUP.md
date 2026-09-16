@@ -162,9 +162,14 @@ interval clears 50%.
 
 **M15 — main EA instance**, `InpSymbols`:
 ```
-BTC,ETH,EURUSD,GBPUSD,USDCHF,USDJPY
+BTC,ETH,EURUSD,GBPUSD,USDCHF,USDJPY,AUDUSD
 ```
-All six trade both directions.
+All seven trade both directions. Note: AUDUSD's validated hit rate
+(~80% both directions) is far higher than every other symbol here -
+technically passes every bar we set, but that magnitude is unusual for
+a G10 forex pair and may reflect an unusually trend-heavy recent period
+rather than a permanent edge. Worth re-checking against fresh data
+sooner than the others if results start looking different live.
 
 **M1 — separate EA instance** (`InpTimeframe = PERIOD_M1`), `InpSymbols`:
 ```
